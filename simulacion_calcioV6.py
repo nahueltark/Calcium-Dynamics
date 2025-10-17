@@ -52,8 +52,8 @@ v_x = 0.001
 v_xL = 0.0005
 
 # Distribuciones de amplitud para eventos
-mu_H = 0.3; sigma_H = 0.2   # HACS (altas amplitudes) [df/f0]
-mu_L = 0.5; sigma_L = 0.4    # LACS (bajas amplitudes) [df/f0]
+mu_H = 0.5; sigma_H = 0.001   # HACS (altas amplitudes) [df/f0]
+mu_L = 0.5; sigma_L = 0.001    # LACS (bajas amplitudes) [df/f0]
 mu_Y = 0.0; sigma_Y = 0.05   # YVC1 [df/f0]
 
 # Tasas de eventos (eventos/hora)
@@ -62,7 +62,7 @@ lambda_L = 5
 lambda_Y = 0  # No implementado diferente de cero
 
 # Parámetros de simulación
-max_YVC1 = 0.6         # Variación inicial por liberación de YVC1 [df/f0] DEFAULT=0.6
+max_YVC1 = 0.5         # Variación inicial por liberación de YVC1 [df/f0] DEFAULT=0.6
 umbral_YVC1 = 0.3      # Umbral de liberación vacuolar [df/f0]
 umbral_detec = 0.6     # Umbral de detección en microscopía [df/f0]
 tau = 50               # Tiempo mínimo de activación de YVC1 [s] DEFAULT=50
@@ -176,7 +176,8 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
     print(f"Simulando célula con modoYVC1={modoYVC1}")
     print(f"Eventos HACS: {len(eventos_H)}, Eventos LACS: {len(eventos_L)}")
     
-    dcaY_0 = deltaf2concentracion(ca_0_cit, max_YVC1) #in uM
+    # dcaY_0 = deltaf2concentracion(ca_0_cit, max_YVC1) #in uM
+    dcaY_0 = deltaf2concentracion(ca_0_cit, max_YVC1) - ca_0_cit #Es el INCREMENTO in uM
     # Combinar y ordenar todos los eventos HACS/LACS
     todos_eventos = []
     for tiempo, amplitud in zip(eventos_H, amplitudes_H):
@@ -184,7 +185,7 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
     for tiempo, amplitud in zip(eventos_L, amplitudes_L):
         todos_eventos.append(('LACS', tiempo, amplitud))
     
-    todos_eventos.sort(key=lambda x: x[1])
+    todos_eventos.sort(key=lambda x: x[1]) # in dF/f0
     todos_eventos.append(('FIN', t_simulacion, 0))
     
     # Condiciones iniciales
@@ -212,8 +213,9 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                 tipo, tiempo_evento, amplitud = todos_eventos[i-1]
                 
                 # Aplicar liberación de calcio
-                incremento = deltaf2concentracion(ca_0_cit, amplitud)
+                incremento = deltaf2concentracion(ca_0_cit, amplitud) - ca_0_cit #in uM
                 y_total[-1, 0] = y_total[-1, 0] + incremento
+                print(f"ANtesthrth {i} {np.max(y_total[:, 0])}")
                 x0 = y_total[-1, :].copy()
         
         # Integrar este segmento con detección de YVC1
@@ -264,12 +266,13 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                         break
                 
                 if yvc1_activado and modoYVC1 != 0:  # Solo si YVC1 no está desactivado
-                    print(f"\n*** YVC1 ACTIVADO en t={t_yvc1:.1f}s, ΔF/F0={df_f0_actual:.3f} ***")
+                    # print(f"\n*** YVC1 ACTIVADO en t={t_yvc1:.1f}s, ΔF/F0={df_f0_actual:.3f} ***")
                     
                     # Guardar resultados hasta el momento de activación
                     if idx_yvc1 > 0:
                         ts_total = np.concatenate([ts_total, sol_subsegmento.t[1:idx_yvc1+1]])
                         y_total = np.concatenate([y_total, sol_subsegmento.y.T[1:idx_yvc1+1]])
+                        print(f"ANtes {np.max(y_total[:, 0])}")
                     
                     # CALCULAR LIBERACIÓN SEGÚN MODO YVC1 (CON FACTOR TEMPORAL PARA AMBOS MODOS)
                     dCay = 0
@@ -278,8 +281,7 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                     if modoYVC1 == 1:
                         # Modo 1: Liberación fija con factor temporal
                         dCay = dcaY_0 * (estado_antes_yvc1[1] - estado_antes_yvc1[0]) * factor_temporal / (ca_0_vac - ca_0_cit)
-                        print(f"  Modo 1 - Liberación: {dCay:.3f}uM (factor_temporal={factor_temporal:.3f})")
-                        
+                        # print(f"  Modo 1 - Liberación: {dCay:.3f}uM (factor_temporal={factor_temporal:.3f})")
                     elif modoYVC1 == 2:
                         # Modo 2: Rampa saturada basada en calcio CITOSÓLICO
                         cac_actual = estado_antes_yvc1[0]  # uM citosólico
@@ -299,13 +301,14 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                     
                     # Aplicar liberación
                     estado_despues_yvc1 = estado_antes_yvc1.copy()
+                    # print(f"ANtes {estado_despues_yvc1[0]}")
                     estado_despues_yvc1[0] += dCay  # Aumentar calcio citosólico
-                    
+                    # print(f"Despu {estado_despues_yvc1[0]}")
                     factor_vol = calcular_factor_volumen(t_yvc1, diametro_cell, diametro_vac)
                     estado_despues_yvc1[1] -= dCay * factor_vol  # Disminuir calcio vacuolar
                     
-                    print(f"  Estado antes YVC1: ca_cit={estado_antes_yvc1[0]:.3f}uM, ca_vac={estado_antes_yvc1[1]:.0f}uM")
-                    print(f"  Estado después YVC1: ca_cit={estado_despues_yvc1[0]:.3f}uM, ca_vac={estado_despues_yvc1[1]:.0f}uM")
+                    # print(f"  Estado antes YVC1: ca_cit={estado_antes_yvc1[0]:.3f}uM, ca_vac={estado_antes_yvc1[1]:.0f}uM")
+                    # print(f"  Estado después YVC1: ca_cit={estado_despues_yvc1[0]:.3f}uM, ca_vac={estado_despues_yvc1[1]:.0f}uM")
                     
                     # Registrar evento y actualizar
                     eventos_Y.append(t_yvc1)
@@ -319,14 +322,16 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                     # No hubo YVC1 o YVC1 está desactivado (modoYVC1 = 0)
                     ts_total = np.concatenate([ts_total, sol_subsegmento.t[1:]])
                     y_total = np.concatenate([y_total, sol_subsegmento.y.T[1:]])
+                    print(f"ANtes {np.max(y_total[:, 0])}")
                     estado_pendiente = sol_subsegmento.y.T[-1].copy()
                     segmento_completado = True
             
             # Actualizar x0 para el próximo segmento
             x0 = estado_pendiente.copy()
-    
+            
     # Resultados finales
     cac = y_total[:, 0]
+    print(f"ANtes {np.max(y_total[:, 0])}")
     cav = y_total[:, 1]
     df_f0 = concentracion2deltaf(ca_0_cit, cac)
     
