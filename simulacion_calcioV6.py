@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 from scipy.signal import find_peaks
 import random
-
+import scipy.io as sio
 
 # =============================================================================
 # CONFIGURACIÓN DE SEMILLA 
@@ -52,25 +52,26 @@ v_x = 0.001
 v_xL = 0.0005
 
 # Distribuciones de amplitud para eventos
-mu_H = 0.5; sigma_H = 0.001   # HACS (altas amplitudes) [df/f0]
-mu_L = 0.5; sigma_L = 0.001    # LACS (bajas amplitudes) [df/f0]
+mu_H = 0.25; sigma_H = 0.2   # HACS (altas amplitudes) [df/f0]
+mu_L = 0.6; sigma_L = 0.2    # LACS (bajas amplitudes) [df/f0]
 mu_Y = 0.0; sigma_Y = 0.05   # YVC1 [df/f0]
 
 # Tasas de eventos (eventos/hora)
-lambda_H = 4
-lambda_L = 5
+lambda_H = 6
+lambda_L = 9
 lambda_Y = 0  # No implementado diferente de cero
 
 # Parámetros de simulación
-max_YVC1 = 0.5         # Variación inicial por liberación de YVC1 [df/f0] DEFAULT=0.6
+max_YVC1 = 0.6        # Variación inicial por liberación de YVC1 [df/f0] DEFAULT=0.6
 umbral_YVC1 = 0.3      # Umbral de liberación vacuolar [df/f0]
 umbral_detec = 0.6     # Umbral de detección en microscopía [df/f0]
-tau = 50               # Tiempo mínimo de activación de YVC1 [s] DEFAULT=50
+tau = 50            # Tiempo mínimo de activación de YVC1 [s] DEFAULT=50
 gamma = 0.001          # Factor de disipación del calcio
 
 # Configuración de simulación
-guardar_resultados = False
-celulas = 1
+guardar_resultados = True
+guardar_imagenes = False
+celulas = 5
 modoYVC1 = 1           # 0: desactivado, 1: umbral fijo, 2: rampa saturada
 usarSigmoide = False   # True: usar sigmoide para tiempos, False: uniforme
 
@@ -174,7 +175,7 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
     Versión que reintegra explícitamente después de cada activación de YVC1
     """
     print(f"Simulando célula con modoYVC1={modoYVC1}")
-    print(f"Eventos HACS: {len(eventos_H)}, Eventos LACS: {len(eventos_L)}")
+    # print(f"Eventos HACS: {len(eventos_H)}, Eventos LACS: {len(eventos_L)}")
     
     # dcaY_0 = deltaf2concentracion(ca_0_cit, max_YVC1) #in uM
     dcaY_0 = deltaf2concentracion(ca_0_cit, max_YVC1) - ca_0_cit #Es el INCREMENTO in uM
@@ -198,7 +199,7 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
     ultima_activacion_yvc1 = -tau  # Permite activación desde inicio
     
     print(f"Estado inicial: ca_cit={x0[0]:.3f}uM, ca_vac={x0[1]:.0f}uM")
-
+    
     # Simular entre cada par de eventos HACS/LACS
     for i in range(len(todos_eventos)):
         if i == 0:
@@ -215,7 +216,6 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                 # Aplicar liberación de calcio
                 incremento = deltaf2concentracion(ca_0_cit, amplitud) - ca_0_cit #in uM
                 y_total[-1, 0] = y_total[-1, 0] + incremento
-                print(f"ANtesthrth {i} {np.max(y_total[:, 0])}")
                 x0 = y_total[-1, :].copy()
         
         # Integrar este segmento con detección de YVC1
@@ -266,13 +266,10 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                         break
                 
                 if yvc1_activado and modoYVC1 != 0:  # Solo si YVC1 no está desactivado
-                    # print(f"\n*** YVC1 ACTIVADO en t={t_yvc1:.1f}s, ΔF/F0={df_f0_actual:.3f} ***")
-                    
-                    # Guardar resultados hasta el momento de activación
-                    if idx_yvc1 > 0:
+                    # Guardar resultados hasta el momento de activación (INCLUYENDO el punto de YVC1)
+                    if idx_yvc1 >= 0:  # Cambiado a >= 0 para incluir el punto de activación
                         ts_total = np.concatenate([ts_total, sol_subsegmento.t[1:idx_yvc1+1]])
                         y_total = np.concatenate([y_total, sol_subsegmento.y.T[1:idx_yvc1+1]])
-                        print(f"ANtes {np.max(y_total[:, 0])}")
                     
                     # CALCULAR LIBERACIÓN SEGÚN MODO YVC1 (CON FACTOR TEMPORAL PARA AMBOS MODOS)
                     dCay = 0
@@ -281,7 +278,6 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                     if modoYVC1 == 1:
                         # Modo 1: Liberación fija con factor temporal
                         dCay = dcaY_0 * (estado_antes_yvc1[1] - estado_antes_yvc1[0]) * factor_temporal / (ca_0_vac - ca_0_cit)
-                        # print(f"  Modo 1 - Liberación: {dCay:.3f}uM (factor_temporal={factor_temporal:.3f})")
                     elif modoYVC1 == 2:
                         # Modo 2: Rampa saturada basada en calcio CITOSÓLICO
                         cac_actual = estado_antes_yvc1[0]  # uM citosólico
@@ -295,20 +291,19 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                             f = (cac_actual - umbral_cit) / dcaY_0
                         else:
                             f = 1
-                        
                         dCay = f * dcaY_0 * (estado_antes_yvc1[1] - estado_antes_yvc1[0]) * factor_temporal / (ca_0_vac - ca_0_cit)
-                        print(f"  Modo 2 - Liberación: {dCay:.3f}uM (f={f:.2f}, factor_temporal={factor_temporal:.3f})")
                     
                     # Aplicar liberación
                     estado_despues_yvc1 = estado_antes_yvc1.copy()
-                    # print(f"ANtes {estado_despues_yvc1[0]}")
                     estado_despues_yvc1[0] += dCay  # Aumentar calcio citosólico
-                    # print(f"Despu {estado_despues_yvc1[0]}")
+                    
                     factor_vol = calcular_factor_volumen(t_yvc1, diametro_cell, diametro_vac)
                     estado_despues_yvc1[1] -= dCay * factor_vol  # Disminuir calcio vacuolar
                     
-                    # print(f"  Estado antes YVC1: ca_cit={estado_antes_yvc1[0]:.3f}uM, ca_vac={estado_antes_yvc1[1]:.0f}uM")
-                    # print(f"  Estado después YVC1: ca_cit={estado_despues_yvc1[0]:.3f}uM, ca_vac={estado_despues_yvc1[1]:.0f}uM")
+                    # ¡GUARDAR EL ESTADO DESPUÉS DE YVC1!
+                    ts_total = np.concatenate([ts_total, [t_yvc1]])
+                    y_total = np.concatenate([y_total, [estado_despues_yvc1]])
+                    
                     
                     # Registrar evento y actualizar
                     eventos_Y.append(t_yvc1)
@@ -322,7 +317,6 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
                     # No hubo YVC1 o YVC1 está desactivado (modoYVC1 = 0)
                     ts_total = np.concatenate([ts_total, sol_subsegmento.t[1:]])
                     y_total = np.concatenate([y_total, sol_subsegmento.y.T[1:]])
-                    print(f"ANtes {np.max(y_total[:, 0])}")
                     estado_pendiente = sol_subsegmento.y.T[-1].copy()
                     segmento_completado = True
             
@@ -331,11 +325,11 @@ def simular_celula_con_yvc1(modoYVC1, eventos_H, amplitudes_H, eventos_L, amplit
             
     # Resultados finales
     cac = y_total[:, 0]
-    print(f"ANtes {np.max(y_total[:, 0])}")
     cav = y_total[:, 1]
     df_f0 = concentracion2deltaf(ca_0_cit, cac)
     
     print(f"\n=== SIMULACIÓN COMPLETADA ===")
+    # print(f"Máximo calcio citosólico final: {np.max(cac):.4f}uM")
     
     return ts_total, cac, cav, df_f0, eventos_Y
 
@@ -419,7 +413,7 @@ def graficar_resultados(t, cac, cav, df_f0, eventos_H, eventos_L, eventos_Y, eve
     
     plt.tight_layout()
     
-    if guardar_resultados:
+    if guardar_imagenes:
         plt.savefig(f'celula_{num_celula}_yvc1.png', dpi=300, bbox_inches='tight')
     
     plt.show()
@@ -437,6 +431,9 @@ def graficar_resultados(t, cac, cav, df_f0, eventos_H, eventos_L, eventos_Y, eve
 
 print("Iniciando simulación...")
 
+# 1. PRIMERO: Crear una lista para acumular resultados
+resultados_celulas = []
+
 for i in range(celulas):
     # Simular eventos aleatorios
     eventos_H, amplitudes_H = simular_liberaciones_aleatorias(lambda_H, mu_H, sigma_H)
@@ -451,7 +448,80 @@ for i in range(celulas):
     pk_values, pk_times, _ = detectar_eventos_detectables(df_f0, t, umbral_detec)
     eventos_detectables = pk_times
     
+    # 2. SEGUNDO: Guardar resultados de ESTA célula
+    resultados_celula = {
+        'numero_celula': i + 1,
+        'eventos_HACS': len(eventos_H),
+        'eventos_LACS': len(eventos_L),
+        'eventos_YVC1': len(eventos_Y),
+        'eventos_detectables': len(eventos_detectables),
+        'pk_values': pk_values.tolist() if len(pk_values) > 0 else [],
+        'pk_times': pk_times.tolist() if len(pk_times) > 0 else [],
+        'tiempos_HACS': eventos_H,
+        'tiempos_LACS': eventos_L, 
+        'tiempos_YVC1': eventos_Y,
+        'amplitudes_HACS': amplitudes_H,
+        'amplitudes_LACS': amplitudes_L
+    }
+    
+    resultados_celulas.append(resultados_celula)
+    
     # Graficar resultados
-    graficar_resultados(t, cac, cav, df_f0, eventos_H, eventos_L, eventos_Y, eventos_detectables, i+1)
+    # graficar_resultados(t, cac, cav, df_f0, eventos_H, eventos_L, eventos_Y, eventos_detectables, i+1)
 
-print("Simulación completada")
+# 3. TERCERO: Guardar TODOS los resultados después del loop
+if guardar_resultados and resultados_celulas:
+    print("\n=== GUARDANDO RESULTADOS ===")
+    
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nombre_base = f"resultados_simulacion_{timestamp}"
+    
+    try:
+        # Preparar datos para MATLAB
+        mat_data = {}
+        
+        # Agregar datos de cada célula
+        for i, celula in enumerate(resultados_celulas):
+            prefix = f"celula_{i+1}_"
+            mat_data[prefix + 'num_HACS'] = celula['eventos_HACS']
+            mat_data[prefix + 'num_LACS'] = celula['eventos_LACS']
+            mat_data[prefix + 'num_YVC1'] = celula['eventos_YVC1']
+            mat_data[prefix + 'num_detectables'] = celula['eventos_detectables']
+            
+            # Arrays de picos detectados
+            mat_data[prefix + 'pk_values'] = np.array(celula['pk_values']) if celula['pk_values'] else np.array([])
+            mat_data[prefix + 'pk_times'] = np.array(celula['pk_times']) if celula['pk_times'] else np.array([])
+            
+            # Tiempos de eventos
+            mat_data[prefix + 'tiempos_HACS'] = np.array(celula['tiempos_HACS'])
+            mat_data[prefix + 'tiempos_LACS'] = np.array(celula['tiempos_LACS'])
+            mat_data[prefix + 'tiempos_YVC1'] = np.array(celula['tiempos_YVC1'])
+            mat_data[prefix + 'amplitudes_HACS'] = np.array(celula['amplitudes_HACS'])
+            mat_data[prefix + 'amplitudes_LACS'] = np.array(celula['amplitudes_LACS'])
+        
+        # Agregar parámetros globales
+        mat_data['modoYVC1'] = modoYVC1
+        mat_data['max_YVC1'] = max_YVC1
+        mat_data['umbral_YVC1'] = umbral_YVC1
+        mat_data['umbral_detec'] = umbral_detec
+        mat_data['tau'] = tau
+        mat_data['lambda_H'] = lambda_H
+        mat_data['lambda_L'] = lambda_L
+        mat_data['mu_H'] = mu_H
+        mat_data['sigma_H'] = sigma_H
+        mat_data['mu_L'] = mu_L
+        mat_data['sigma_L'] = sigma_L
+        mat_data['num_celulas'] = celulas
+        mat_data['timestamp'] = timestamp
+        
+        # Guardar como .mat
+        archivo_mat = f"{nombre_base}.mat"
+        sio.savemat(archivo_mat, mat_data, format='4')
+        print(f"Resultados guardados en: {archivo_mat} (formato MATLAB v4)")
+        
+    except Exception as e:
+        print(f"Error guardando .mat: {e}")
+    
+    
+print(f"\n=== SIMULACIÓN COMPLETADA ===")
